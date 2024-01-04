@@ -1,0 +1,77 @@
+package GoogleAppsAnalysis;
+
+import java.io.IOException;
+import java.util.TreeMap;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class TopInstalledApps {
+
+    public static class AppMapper extends Mapper<LongWritable, Text, Text, LongWritable> {
+
+        @Override
+        protected void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String[] parts = value.toString().split(",");
+
+            if (parts.length >= 2 && !parts[0].equals("App")) {
+                String appName = parts[0].trim();
+                String totalInstalls = parts[1].trim(); // "Total_Installs" column is at index 1
+
+                try {
+                    long installsCount = Long.parseLong(totalInstalls);
+                    context.write(new Text(appName), new LongWritable(installsCount));
+                } catch (NumberFormatException e) {
+                    // Log an error or handle the invalid input in some way
+                    System.err.println("Invalid installs value: " + totalInstalls);
+                }
+            }
+        }
+    }
+
+    public static class TopAppsReducer extends Reducer<Text, LongWritable, Text, LongWritable> {
+        private TreeMap<Long, String> topAppsMap = new TreeMap<>();
+
+        @Override
+        protected void reduce(Text key, Iterable<LongWritable> values, Context context)
+                throws IOException, InterruptedException {
+            long totalInstalls = 0;
+            for (LongWritable value : values) {
+                totalInstalls += value.get();
+            }
+            // Keep track of the top 10 installed apps
+            topAppsMap.put(totalInstalls, key.toString());
+            if (topAppsMap.size() > 10) {
+                topAppsMap.remove(topAppsMap.firstKey());
+            }
+        }
+
+        @Override
+        protected void cleanup(Context context) throws IOException, InterruptedException {
+            // Emit the top 10 installed apps
+            for (long installs : topAppsMap.descendingKeySet()) {
+                context.write(new Text(topAppsMap.get(installs)), new LongWritable(installs));
+            }
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "Top Installed Apps");
+        job.setJarByClass(TopInstalledApps.class);
+        job.setMapperClass(AppMapper.class);
+        job.setReducerClass(TopAppsReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(LongWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0])); // Input path
+        FileOutputFormat.setOutputPath(job, new Path(args[1])); // Output path
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
